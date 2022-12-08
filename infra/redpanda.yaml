@@ -1,0 +1,6 @@
+version: '3'
+services:
+  redpanda:
+    image: vectorized/redpanda:latest
+    ports:
+      - 9092:9092
