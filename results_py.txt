@@ -1,0 +1,4 @@
+topic ID:  drpbxjnphz
+PRODUCER: 
+71428 msg/sec and 653 mb/sec
+
