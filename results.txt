@@ -1,0 +1,8 @@
+Confluent Kafka
+PRODUCER: 76923 msg/sec and 712.513991 mb/sec
+CONSUMER: 76923 msg/sec and 718.676768 mb/sec
+=================
+kafka go
+PRODUCER: Running producer for topic  M0SUFbGXPq
+55555 msg/sec and 512.532881 mb/sec
+CONSUMER: 
