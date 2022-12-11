@@ -13,7 +13,7 @@
   - Three producer, 3x async replication
 - Consumer
   - Single consumer
-  - Three consumer
+  - Multi consumer
 
 - Go Libs
   - segmentio/kafka-go
