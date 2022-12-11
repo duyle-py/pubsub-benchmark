@@ -5,11 +5,14 @@ import (
 	"fmt"
 	"log"
 	"net"
-	"sync"
 	"time"
 
 	"github.com/confluentinc/confluent-kafka-go/kafka"
 )
+
+const NUM_MSG = 1000000
+const MSG_SIZE = 1e4
+const BROKER = "localhost:9092"
 
 var chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890"
 
@@ -23,100 +26,106 @@ func shortID(length int) string {
 	return string(b)
 }
 
-const NUM_MSG = 1000000
-const MSG_SIZE = 1e4
-
-var topic = shortID(10)
-
-func Producer() {
-	start := time.Now()
-	msg := shortID(MSG_SIZE)
-
-	var wg sync.WaitGroup
-
-	NUM_WORKER := 1
-	for w := 0; w < NUM_WORKER; w++ {
-		wg.Add(1)
-
-		go func() {
-			producer, err := kafka.NewProducer(&kafka.ConfigMap{"bootstrap.servers": "localhost:9092"})
-
-			if err != nil {
-				log.Fatal(err)
-			}
-			go func() {
-				for _ = range producer.Events() {
-				}
-			}()
-
-			for i := 0; i < NUM_MSG; i++ {
-				for {
-					err := producer.Produce(&kafka.Message{
-						TopicPartition: kafka.TopicPartition{Topic: &topic},
-						Value:          []byte(msg),
-					}, nil)
-
-					if err == nil {
-						break
-					} else {
-						continue
-					}
-				}
-			}
-
-			for producer.Flush(5000) > 0 {
-				fmt.Print("Still waiting to flush outstanding messages\n")
-			}
-
-			wg.Done()
-		}()
-	}
-	wg.Wait()
-
-	elapsed := time.Since(start)
-
-	log.Printf("%d msg/sec and %d mb/sec", NUM_MSG*NUM_WORKER/int(elapsed.Seconds()), NUM_MSG*NUM_WORKER*MSG_SIZE/1024/1024/int(elapsed.Seconds()))
+type ConfluentKafka struct {
+	TopicID string
 }
 
-func Consumer() {
-	// totalReturnEvents := 0
+func (k *ConfluentKafka) Produce() {
+	//Init topic
+	k.TopicID = shortID(10)
+	msg := shortID(MSG_SIZE)
 
+	producer, err := kafka.NewProducer(&kafka.ConfigMap{"bootstrap.servers": BROKER})
+
+	if err != nil {
+		log.Fatal("Can't connect to brokers", err)
+	}
+
+	// Async event handler
+	go func() {
+		for e := range producer.Events() {
+			switch ev := e.(type) {
+			case *kafka.Message:
+				if ev.TopicPartition.Error != nil {
+					fmt.Println("Errors in TOPIC partition: ", ev)
+				}
+
+			case kafka.Error:
+				fmt.Println("Errors: ", ev)
+			default:
+				fmt.Println("Ignore events")
+			}
+		}
+	}()
+
+	//Async producer
+	for i := 0; i < NUM_MSG; i++ {
+		//Retries this message
+		for {
+			err := producer.Produce(&kafka.Message{
+				TopicPartition: kafka.TopicPartition{Topic: &k.TopicID},
+				Value:          []byte(msg),
+			}, nil)
+
+			if err != nil {
+				if err.(kafka.Error).Code() == kafka.ErrQueueFull {
+					continue
+				}
+			} else {
+				break
+			}
+		}
+	}
+
+	for producer.Flush(5000) > 0 {
+		fmt.Print("Still waiting to flush outstanding messages\n")
+	}
+}
+
+func (k *ConfluentKafka) Consume() {
 	c, err := kafka.NewConsumer(&kafka.ConfigMap{
-		"bootstrap.servers":        "localhost:9092",
-		"group.id":                 shortID(3),
+		"bootstrap.servers":        BROKER,
+		"group.id":                 shortID(3), //random group
 		"auto.offset.reset":        "smallest",
 		"enable.auto.offset.store": false,
 	})
-	start := time.Now()
-
 	if err != nil {
-		log.Println(err)
+		log.Fatal("Can't connect to brokers", err)
 	}
 
-	err = c.SubscribeTopics([]string{topic}, nil)
+	err = c.SubscribeTopics([]string{k.TopicID}, nil)
 	if err != nil {
-		log.Println(err)
+		log.Fatal("Can't subcribe", err)
 	}
+
 	totalMsg := 0
 	for {
 		ev := c.Poll(100)
 		switch e := ev.(type) {
 		case *kafka.Message:
-			_, err := c.StoreMessage(e)
-			if err == nil {
-				totalMsg++
+			//Retries inf
+			for {
+				_, err := c.StoreMessage(e)
+				if err == nil {
+					totalMsg++
+					break
+				}
 			}
+
+		default:
+			continue
 		}
 		if totalMsg == NUM_MSG {
 			break
 		}
 	}
+}
 
-	c.Close()
-	elapsed := time.Since(start)
-
-	log.Printf("%d msg/sec and %f mb/sec", NUM_MSG/int(elapsed.Seconds()), NUM_MSG*MSG_SIZE/1024.0/1024/float64(elapsed.Seconds()))
-
+func calc_time(f func()) {
+	start := time.Now()
+	f()
+	end := time.Since(start)
+	log.Printf("%d msg/sec and %f mb/sec", NUM_MSG/int(end.Seconds()), NUM_MSG*MSG_SIZE/1024.0/1024/float64(end.Seconds()))
 }
 
 func main() {
@@ -134,8 +143,9 @@ func main() {
 		time.Sleep(20 * time.Second)
 	}
 
-	Producer()
-
-	Consumer()
-
+	confluent := ConfluentKafka{TopicID: shortID(10)}
+	fmt.Print("PRODUCER: ")
+	calc_time(confluent.Produce)
+	fmt.Print("CONSUMER: ")
+	calc_time(confluent.Consume)
 }
